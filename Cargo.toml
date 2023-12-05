@@ -1,13 +1,21 @@
 [package]
+name = "srb2discb"
 authors = ["gm3k4g <thingstuffet@gmail.com>"]
 description = "`srb2discb` is designed to connect to a Discord bot, and allow for the monitoring of [an] SRB2 server(s), with a slew of tools at hand."
-#homepage
-name = "srb2discb"
+keywords = ["discord", "srb2"]
+homepage = "https://github.com/gm3k4g/srb2discb"
+license = "MIT"
 version = "1.0.0"
 edition = "2021"
 
 # Yes, I have to probably not use asterisks here (due to semver breaking)..
 [dependencies]
-tokio 			= { version = "*", features = ["rt-multi-thread", "macros"] }
-serenity 		= { version = "*", default-features = false, features = ["framework", "standard_framework", "client", "gateway", "model", "rustls_backend"] }
-serde  			= "*"
+serenity 		= { version= "0.12", features = ["client", "gateway","rustls_backend", "model"], default-features = false }
+tokio 			= { version = "1.0", features = ["macros", "rt-multi-thread"] }
+serde_json 		= "1.0.108"
+logwatcher 		= "0.1"
+
+
+
+#tokio 			= { version = "*", features = ["rt-multi-thread", "macros"] }
+#serenity 		= { version = "*", features = ["framework", "standard_framework", "rustls_backend"] }
