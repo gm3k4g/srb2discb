@@ -34,13 +34,19 @@ const ARG_CONFIG_S: &str = "-c";
 const ARG_PARAMS: &str = "--params";
 const ARG_PARAMS_S: &str = "-p";
 
+// how often to update messages on discord (in miliseconds)
+const REFRESH_RATE: u64 = 1200;
+
 use std::env;
 use std::fs;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 
-use logwatcher::{ 
-    LogWatcher,LogWatcherAction
-};
+use tokio::time::Duration;
 
+use serenity::http::Http;
+use serenity::builder::{CreateEmbed, ExecuteWebhook};
+use serenity::model::webhook::Webhook;
 use serenity::model::prelude::Message;
 use serenity::async_trait;
 use serenity::client::{
@@ -113,26 +119,13 @@ async fn main() {
     }
 }
 
-use serenity::http::Http;
-use serenity::builder::{CreateEmbed, ExecuteWebhook};
-use serenity::model::webhook::Webhook;
-use tokio::time::{sleep, Duration};
-
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, BufRead, BufReader, BufWriter};
-use std::sync::mpsc;
-use std::time::Instant;
-use std::os::linux::fs::MetadataExt;
-
-const REFRESH_RATE: u64 = 1200;
-
 //
 // Get the total lines of the file.
 //
 fn get_lines_num(file_path: &str) -> Result<usize, Box<dyn std::error::Error>> {
     let line = match std::fs::read_to_string(file_path) {
         Ok(line) => line,
-        Err(err) => String::from(">>LOG FILE RELOAD<<"), //"LOG FILE RELOADING"),
+        Err(_) => String::from(">>LOG FILE RELOAD<<"),
     };
         
     Ok(line.lines().count())
@@ -141,6 +134,7 @@ fn get_lines_num(file_path: &str) -> Result<usize, Box<dyn std::error::Error>> {
 //
 // Get the last line of the file.
 //
+/*
 fn get_last_line(file_path: &str) -> Result<String, Box<dyn std::error::Error>> {
 
     let line = match std::fs::read_to_string(file_path) {
@@ -154,6 +148,7 @@ fn get_last_line(file_path: &str) -> Result<String, Box<dyn std::error::Error>> 
         .iter()
         .map(|&s| String::from(s)).collect())
 }
+*/
 
 //
 // Gets the range from `start` to `end` of a file.
@@ -204,20 +199,29 @@ async fn connect_bot() {
     let http = Http::new(token);
 
     // TODO: turn this into cli arg (?)
+    let home = home::home_dir().unwrap();
 
-    // TODO: accept universal unix constants (e.g. $HOME, ~, etc. how to do that)
-    let msg_path = "/home/user/.srb2/luafiles/client/DiscordBot/Messages.txt";
+    let home_str = home.to_str().unwrap();
+    /*match home::home_dir() {
+        Some(path) => path.to_str().unwrap(),
+        None => {
+            println!("Impossible to get your home dir!");
+            ""
+        }
+    };*/
 
-    // TODO: log rotation when
-    // Replace messages, since there will be new ones ... if you want more details just check your rotating logs lol
+    let msg_path = format!("{}{}", home_str, "/.srb2/luafiles/client/DiscordBot/Messages.txt");
+
+    // TODO: log rotation yay or ney?
+    // Replace messages, since there will be new ones ... if you want more details just check your rotating srb2 logs lol
     std::fs::write(&msg_path, "\n").unwrap();
     //let mut file = File::create(&msg_path).unwrap();
 
     //let mut prev_str = String::from("");\
 
     let mut seek_start = 0;
-    let mut seek_end = 0;
-    let mut str_arr : Vec<String> = Vec::new();
+
+    //let mut str_arr : Vec<String> = Vec::new();
 
     // TODO: consider checking whether we're in log mode (reading directly from latest-log.txt) 
     //      or in srb2lua-log mode (reading directly from a file supplied by a lua script).
@@ -229,22 +233,19 @@ async fn connect_bot() {
     //              one SOLUTION to this is to tell the starting seeker to jump at the position of the last
     //              string we've read and continue reading.
     //          In the latter, it should be fine, but we should implement the above.
-    // TODO: before doing anything, delete SRB2's log file.
-
-
     loop {
-          seek_end = get_lines_num(&msg_path).unwrap();
+        let seek_end = get_lines_num(&msg_path).unwrap();
 
           if seek_start != seek_end {
-            let mut collected_strs = match read_range(&msg_path, seek_start, seek_end) {
+            let collected_strs = match read_range(&msg_path, seek_start, seek_end) {
                 Ok(strs) => strs,
-                Err(e) => continue,
+                Err(_) => continue,
             };
             if collected_strs.len() <= 1 {
                 continue
             }
             //println!("{}", collected_strs);
-            let mut webhook = Webhook::from_url(&http, url).await;
+            let webhook = Webhook::from_url(&http, url).await;
             let builder = ExecuteWebhook::new().content(collected_strs);
             webhook
                 .expect("Couldn't run webhook")
@@ -253,61 +254,12 @@ async fn connect_bot() {
             seek_start = seek_end;
           }
 
-
-          //println!("The file has {} lines", get_lines_num(&path).unwrap());
-
-
-        /*
-        for i in seek_start..seek_end {
-            let line = read_last_line(&path).unwrap();
-            str_arr.push(line);
-        }
-        */
-
-        //let next_str = read_last_line(&path, 2).unwrap();
-
-        /*if next_str != prev_str {
-            println!("{}", next_str);
-
-            let mut webhook = Webhook::from_url(&http, url).await;
-            let builder = ExecuteWebhook::new().content(next_str.clone().as_str());
-            webhook
-                .expect("Couldn't run webhook")
-                .execute(&http, false, builder).await.unwrap();
-        }
-
-        prev_str = next_str;*/
-
         // Refresh period
         std::thread::sleep(Duration::from_millis(REFRESH_RATE));
     }
-
-/*
-    log_watcher.watch(&mut move |line: String| {
-
-        let mut webhook = Webhook::from_url(&http, url).await;
-        let builder = ExecuteWebhook::new().content(line.clone().as_str());
-        webhook
-            .expect("Couldn't run webhook")
-            .execute(&http, false, builder).await.unwrap();
-
-        println!("{}",line.clone().as_str());
-        };
-
-        LogWatcherAction::None
-    });
-    */
-
-
-    /*
-    tokio::join!(
-        login_bot(),
-        collect_msg(),
-    );
-    */
 }
 
-async fn login_bot() {
+async fn _login_bot() {
     let data = fs::read_to_string("./secret.json")
         .expect("'secret.json' doesn't exist!");
 
@@ -338,22 +290,6 @@ async fn login_bot() {
     }
 }
 
-use serenity::model::id::ChannelId;
-async fn collect_msg() {
-
-    let mut log_watcher = LogWatcher::register("/home/einfoed/.srb2/latest-log.txt".to_string()).unwrap();
-    log_watcher.watch(&mut move |line: String| {
-
-        println!("{line}");
-
-        //let channel_id = ChannelId(1176002008222801991); // Replace with your channel ID
-        //channel_id.say(&ctx.http, "Your message here");
-        LogWatcherAction::None
-    });
-
-
-}
-
 fn print_version() {
     println!("{NAME} v{VERSION}");
 }
@@ -374,7 +310,7 @@ USAGE:
     
 ARGS:
 \t<CLI ARGS>
-\t\tA list of arguments that SRB2 can process before the game starts. This can be one argument or many, it doesn't matter. It's advised to visit the SRB2 wiki ({CLI}) to look at what commandline arguments you can provide to SRB2.
+\t\tA list of arguments that SRB2 can process before the game starts. This can be one argument or many. It's advised to visit the SRB2 wiki ({CLI}) to look at what commandline arguments you can provide to SRB2.
 
 \t\tFor example, to start a dedicated server on port 5029 and have your server show up in the standard rooms, execute the program like so:
 \t\t  `{NAME} {ARG_PARAMS} -dedicated -port 5029 -room 38`
