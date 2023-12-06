@@ -1,5 +1,3 @@
-
-
 /*
 const UNDERLINE: &str = "\x1b[4m";
 const UNDERLINE_RESET: &str = "\x1b[24m";
@@ -11,7 +9,6 @@ const YELLOW: &str = "\x1b[33m";
 const RED: &str = "\x1b[31m";
 */
 
-// TODO: Move this out of here ASAP
 const GREEN: &str = "\x1b[32m";
 const WHITE: &str = "\x1b[0m";
 
@@ -33,6 +30,9 @@ const ARG_CONFIG_S: &str = "-c";
 
 const ARG_PARAMS: &str = "--params";
 const ARG_PARAMS_S: &str = "-p";
+
+const ARG_RUN: &str = "--run";
+const ARG_RUN_S: &str = "-r";
 
 // how often to update messages on discord (in miliseconds)
 const REFRESH_RATE: u64 = 1200;
@@ -92,27 +92,33 @@ async fn main() {
 
         // Otherwise, analyze args.
         // TODO: This 'analysis' simply takes one argument and reads the rest as input for that arg.
-        // you may want to fix this.
+        // What you want is to instead stack arguments (e.g. -p blah blah -)
+        // basically, allow for argument stacking, except for the -h/-v directives. These will immediately print either help or version depending on which one was specified first.
         _ => {
 
             // Let's match arguments.
-            // TODO: allow for argument stacking, except for the -h/-v directives. These will immediately print either help or version depending on which one was specified first.
+
             // Afterwards, the program will immediately quit.
             match args[1].as_str() {
 
                 ARG_HELP_S | ARG_HELP => print_help(),
                 ARG_VERSION_S | ARG_VERSION => print_version(),
 
-                // starts by reading a provided config path. otherwise reads from a default config path.
-                // TODO: could default config path be ~/.srb2/srb2discb.json?
-                ARG_CONFIG_S | ARG_CONFIG => {  
-                }, 
-
                 // (start by) directly reading arguments provided via cli
                 ARG_PARAMS_S | ARG_PARAMS => {
+                    todo!()
+                }
+
+                // starts by reading a provided config path. otherwise reads from a default config path.
+                // TODO: could default config path be ~/.srb2/srb2discb.cfg?
+                ARG_CONFIG_S | ARG_CONFIG => {  
+                    todo!()
+                }, 
+
+                ARG_RUN_S | ARG_RUN => {
                     connect_bot().await;
                 },
-                _ => {},
+                _ => print_help(), //print help just in case
             }
 
         }
@@ -194,7 +200,7 @@ async fn connect_bot() {
         .expect("JSON does not have correct format.");
 
     let token = json["bot_token"].as_str().unwrap();
-    let url = json["log_channel"].as_str().unwrap();
+    let url = json["bot_webhook_url"].as_str().unwrap();
 
     let http = Http::new(token);
 
@@ -210,6 +216,7 @@ async fn connect_bot() {
         }
     };*/
 
+    // TODO: create path if it doesn't exist
     let msg_path = format!("{}{}", home_str, "/.srb2/luafiles/client/DiscordBot/Messages.txt");
 
     // TODO: log rotation yay or ney?
@@ -250,7 +257,6 @@ async fn connect_bot() {
             webhook
                 .expect("Couldn't run webhook")
                 .execute(&http, false, builder).await.unwrap();
-
             seek_start = seek_end;
           }
 
@@ -319,6 +325,17 @@ ARGS:
 OPTIONS:
 \t{ARG_PARAMS_S}, {ARG_PARAMS}
 \t\tThis option is used to indicate that everything following this option will be parameters to give to SRB2 before it starts.
+
+\t{ARG_CONFIG_S}, {ARG_CONFIG}
+\t\tIf specified on its own, it opens the config at the default path and directly reads the arguments from there. If one doesn't already exist, it will be created. 
+\t\tIf you have a config at a specific path, then you may specify this path (e.g. -c /path/to/my/file.sh ).
+
+\t{ARG_RUN_S}, {ARG_RUN}
+\t\tIf specified on its own, immediately starts the program with the default parameters. That is to say, it will look for a default config and read for any potential arguments before starting.
+\t\tYou can specify some options, and they can also be stacked. They are as follows:
+\t\t\tNOCONFIG: This will tell the program to just start without reading from any default config. (e.g. --start NOCONFIG )
+\t\t\tRUNSRB2 : This will tell the program to run the program, but to also run SRB2. You can have more control over SRB2 this way.
+\t\t\t\tHere you can also specify a path to your SRB2 executable. (e.g. --start RUNSRB2 /path/to/srb2)
 
 \t{ARG_HELP_S}, {ARG_HELP}
 \t\tShow the help message.
