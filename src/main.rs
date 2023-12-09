@@ -45,22 +45,37 @@ use std::io::{BufRead, BufReader};
 use tokio::time::Duration;
 
 use serenity::http::Http;
-use serenity::builder::{CreateEmbed, ExecuteWebhook};
-use serenity::model::webhook::Webhook;
-use serenity::model::prelude::Message;
+use serenity::builder::CreateMessage;
+use serenity::builder::CreateAllowedMentions as Am;
 use serenity::async_trait;
 use serenity::client::{
     Context,EventHandler,Client
 };
 use serenity::model::gateway::Ready;
 use serenity::all::GatewayIntents;
+use serenity::model::id::UserId;
+use serenity::model::guild::Role;
+use serenity::framework::standard::StandardFramework;
 
+use serenity::model::id::ChannelId;
+use serenity::model::id::GuildId;
 
 struct Handler;
+
+// 
+// Removes first and last characters.
+//
+fn rem_first_and_last(value: &str) -> &str {
+    let mut chars = value.chars();
+    chars.next();
+    chars.next_back();
+    chars.as_str()
+}
 
 // TODO: Error out if the lua file isn't detected on the SRB2 server?
 #[async_trait]
 impl EventHandler for Handler {
+    /*
     async fn message(&self, ctx: Context, msg: Message) {
     if msg.content == "!hello" {
         if let Err(e) = msg.channel_id.say(&ctx.http, "Hello, world!").await {
@@ -68,6 +83,7 @@ impl EventHandler for Handler {
             }
         }
     }
+    */
 
     async fn ready(&self, _: Context, _ready: Ready) {
         println!(
@@ -157,7 +173,26 @@ fn get_last_line(file_path: &str) -> Result<String, Box<dyn std::error::Error>> 
 */
 
 //
-// Gets the range from `start` to `end` of a file.
+// Gets the last match of a specified string from a file.
+// Returns a Result containing a String.
+//
+fn _get_last_match(filename: &str, target: &str) -> Option<String> {
+   let file = File::open(filename).ok()?;
+   let reader = BufReader::new(file);
+   let lines: Vec<String> = reader.lines().collect::<Result<_, _>>().ok()?;
+   let reversed_lines: Vec<&str> = lines.iter().rev().map(AsRef::as_ref).collect();
+
+   match reversed_lines.iter().position(|&line| line.contains(target)) {
+       Some(index) => Some(lines[index].clone()),
+       None => None,
+   }
+}
+
+const _LATEST_LOG: &str = "/.srb2/latest-log.txt";
+
+//
+// Gets the range from `start` to `end` of a file. 
+// Returns a Result containing a String.
 //
 fn read_range(file_path: &str, start: usize, end: usize) -> Result<String, Box<dyn std::error::Error>> {
    let file = File::open(file_path)?;
@@ -181,6 +216,24 @@ fn read_range(file_path: &str, start: usize, end: usize) -> Result<String, Box<d
        
        if line_number > start && line_number <= end {
            let line = string;
+           /* TODO: Detect any kick/bans. Get the server's log file. Search for the last mention of 'ban/kick' and get the reason
+           and then make it part of the message to relay to discord.
+           // If there's any kicks/bans, grab the reason message directly from the server's log file.
+           if line.contains("kick") {
+                let home = home::home_dir().unwrap();
+                let home_str = home.to_str().unwrap();
+                let log_path = format!("{}{}", home_str, LATEST_LOG);
+
+                // This can be none if you somehow clobber `latest-log.txt` with another srb2 executable.
+                // Be careful about this.
+                let line_reason = match get_last_match(&log_path, "kick") {
+                    Some(string) => string,
+                    None => String::from("None"),
+                };
+                println!("{line_reason}");
+           }
+           */
+
            result.push_str(&line);
            result.push('\n');
        } else if line_number > end {
@@ -191,16 +244,54 @@ fn read_range(file_path: &str, start: usize, end: usize) -> Result<String, Box<d
    Ok(result)
 }
 
-async fn connect_bot() {
+async fn replace_emojis(id: u64, http: &Http, content: &str) -> String {
+   let mut new_content = content.to_string();
 
+   // Temporary soltuion: This is used as a lookup to check on whether words were already replaced with emojis or not.
+   let mut replaced: Vec<&str> = Vec::new();
+
+   let guild_id = GuildId::new(id);
+   let emojis = http.get_emojis(guild_id).await.unwrap();
+   let words: Vec<&str> = content.split_whitespace().collect();
+
+   // goes over every word in a string
+   for word in words {
+        // boo, we hate links
+        if word.contains("http://") || word.contains("https://") {
+            new_content = new_content.replace(word, "[LINK]");
+        }
+
+        for emoji in &emojis {
+            let capture = rem_first_and_last(word);
+            let emoji_name = emoji.name.as_str();
+
+            if capture == emoji_name && !replaced.contains(&word) {
+                let emoji_id = emoji.id.get();
+                new_content = new_content.replace(word, format!("<:{}:{}>", emoji_name, emoji_id).as_str());
+                replaced.push(word);
+            }
+        }
+   }
+
+   new_content
+}
+
+
+async fn connect_bot() {
     let data = fs::read_to_string("./secret.json")
         .expect("'secret.json' doesn't exist!");
 
     let json: serde_json::Value = serde_json::from_str(&data)
-        .expect("JSON does not have correct format.");
+        .expect("JSON file doesn't have a correct format!");
 
     let token = json["bot_token"].as_str().unwrap();
-    let url = json["bot_webhook_url"].as_str().unwrap();
+
+    // ok but this is a bruh moment. why i gotta make them strs first and then u64s to make it not panic?
+    let guild = json["guild_id"].as_str().unwrap();
+    let channel = json["channel_id"].as_str().unwrap();
+
+    let chnl_id = channel.parse().unwrap();
+    let guild_id = guild.parse().unwrap();
 
     let http = Http::new(token);
 
@@ -217,52 +308,78 @@ async fn connect_bot() {
     };*/
 
     // TODO: create path if it doesn't exist
+    // this was gonna be used to look up kick/ban message reasons.
     let msg_path = format!("{}{}", home_str, "/.srb2/luafiles/client/DiscordBot/Messages.txt");
 
     // TODO: log rotation yay or ney?
     // Replace messages, since there will be new ones ... if you want more details just check your rotating srb2 logs lol
     std::fs::write(&msg_path, "\n").unwrap();
     //let mut file = File::create(&msg_path).unwrap();
-
-    //let mut prev_str = String::from("");\
-
     let mut seek_start = 0;
+    let framework = StandardFramework::new();
 
-    //let mut str_arr : Vec<String> = Vec::new();
+    let mut client = Client::builder(token, GatewayIntents::default())
+        .event_handler(Handler)
+        .framework(framework)
+        .await
+        .expect("Error creating client");
 
-    // TODO: consider checking whether we're in log mode (reading directly from latest-log.txt) 
-    //      or in srb2lua-log mode (reading directly from a file supplied by a lua script).
-    //          In the former's case, read indiscriminately, [TODO!] we have not yet f
-    //              made line reading consider the string limit, meaning that if the 
-    //              seeker start and end are too far apart yet there's too many strings to
-    //              concat, if the limit is reached the function returns, meaning that all the othe rstrings
-    //              will be ignored as the starting seeker goes to the position of the ending seeker
-    //              one SOLUTION to this is to tell the starting seeker to jump at the position of the last
-    //              string we've read and continue reading.
-    //          In the latter, it should be fine, but we should implement the above.
-    loop {
-        let seek_end = get_lines_num(&msg_path).unwrap();
 
-          if seek_start != seek_end {
-            let collected_strs = match read_range(&msg_path, seek_start, seek_end) {
-                Ok(strs) => strs,
-                Err(_) => continue,
-            };
-            if collected_strs.len() <= 1 {
-                continue
+    // Relay chat loop start
+    let loop_task = tokio::spawn(async move {
+        loop {
+            let seek_end = get_lines_num(&msg_path).unwrap();
+
+            if seek_start != seek_end {
+                let mut collected_strs = match read_range(&msg_path, seek_start, seek_end) {
+                    Ok(strs) => strs,
+                    Err(_) => continue,
+                };
+
+                if collected_strs.len() <= 1 {
+                    continue
+                } else {
+
+                   collected_strs = replace_emojis(guild_id, &http, &collected_strs).await;
+                }
+
+                // Bot: You are not allowed to mention anyone/any role.
+                let user_ids: Vec<UserId> = vec![];
+                let user_roles: Vec<Role> = vec![];
+                /*
+                let mentions = Am::new()
+                    .all_users(false)
+                    .all_roles(false)
+                    .everyone(false);
+                    */
+
+                let message = format!("{collected_strs}");
+                let builder = CreateMessage::new()
+                    .content(message.clone())
+                    .allowed_mentions(Am::new().everyone(false).users(user_ids).roles(user_roles));
+
+
+                // Send a message to the Discord channel
+                let channel_id = ChannelId::new(chnl_id); // Replace with your channel ID
+
+                let _msg = channel_id.send_message(&http, builder)
+                    .await
+                    .expect("REASON");
+
+                seek_start = seek_end;
             }
-            //println!("{}", collected_strs);
-            let webhook = Webhook::from_url(&http, url).await;
-            let builder = ExecuteWebhook::new().content(collected_strs);
-            webhook
-                .expect("Couldn't run webhook")
-                .execute(&http, false, builder).await.unwrap();
-            seek_start = seek_end;
-          }
 
-        // Refresh period
-        std::thread::sleep(Duration::from_millis(REFRESH_RATE));
+            tokio::time::sleep(Duration::from_millis(REFRESH_RATE)).await;
+        }
+    });
+
+    // Start the bot.. done here, because it's async i guess
+    if let Err(why) = client.start().await {
+        println!("Client error: {:?}", why);
     }
+
+    // Wait for the loop task to finish
+    let _ = loop_task.await;
 }
 
 async fn _login_bot() {
@@ -310,7 +427,7 @@ DESCRIPTION: {DESCRIPTION}
 To print this message again, you can either call {NAME} with no arguments, or call it with the `{ARG_HELP_S}` or `{ARG_HELP}` arguments.
 
 USAGE:
-\t{NAME} {ARG_PARAMS_S}, {ARG_PARAMS} [CLI ARGS]
+\t{NAME} {ARG_RUN_S}, {ARG_RUN} [CLI ARGS]
 \t{NAME} {ARG_HELP_S}, {ARG_HELP}
 \t{NAME} {ARG_VERSION_S}, {ARG_VERSION}
     
@@ -325,14 +442,17 @@ ARGS:
 OPTIONS:
 \t{ARG_PARAMS_S}, {ARG_PARAMS}
 \t\tThis option is used to indicate that everything following this option will be parameters to give to SRB2 before it starts.
+\t\tNote that this on its own will not run the program, as `{ARG_RUN_S} | {ARG_RUN}` are required to do that.
 
 \t{ARG_CONFIG_S}, {ARG_CONFIG}
 \t\tIf specified on its own, it opens the config at the default path and directly reads the arguments from there. If one doesn't already exist, it will be created. 
 \t\tIf you have a config at a specific path, then you may specify this path (e.g. -c /path/to/my/file.sh ).
+\t\tNote that this on its own will not run the program, as `{ARG_RUN_S} | {ARG_RUN}` are required to do that.
 
 \t{ARG_RUN_S}, {ARG_RUN}
 \t\tIf specified on its own, immediately starts the program with the default parameters. That is to say, it will look for a default config and read for any potential arguments before starting.
-\t\tYou can specify some options, and they can also be stacked. They are as follows:
+\t\tThis is primarily stacked with the above parameters (e.g. config/parameters)
+\t\tThere are some extra parameters you can provide here, and they are as follows:
 \t\t\tNOCONFIG: This will tell the program to just start without reading from any default config. (e.g. --start NOCONFIG )
 \t\t\tRUNSRB2 : This will tell the program to run the program, but to also run SRB2. You can have more control over SRB2 this way.
 \t\t\t\tHere you can also specify a path to your SRB2 executable. (e.g. --start RUNSRB2 /path/to/srb2)
