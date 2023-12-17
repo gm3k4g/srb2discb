@@ -40,7 +40,8 @@ const REFRESH_RATE: u64 = 1200;
 use std::env;
 use std::fs;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
+use std::fs::OpenOptions;
 
 use tokio::time::Duration;
 
@@ -53,37 +54,76 @@ use serenity::client::{
 };
 use serenity::model::gateway::Ready;
 use serenity::all::GatewayIntents;
-use serenity::model::id::UserId;
-use serenity::model::guild::Role;
 use serenity::framework::standard::StandardFramework;
 
 use serenity::model::id::ChannelId;
 use serenity::model::id::GuildId;
+use serenity::model::channel::Message;
 
 struct Handler;
-
-// 
-// Removes first and last characters.
-//
-fn rem_first_and_last(value: &str) -> &str {
-    let mut chars = value.chars();
-    chars.next();
-    chars.next_back();
-    chars.as_str()
-}
 
 // TODO: Error out if the lua file isn't detected on the SRB2 server?
 #[async_trait]
 impl EventHandler for Handler {
-    /*
-    async fn message(&self, ctx: Context, msg: Message) {
-    if msg.content == "!hello" {
-        if let Err(e) = msg.channel_id.say(&ctx.http, "Hello, world!").await {
-            println!("Error sending message: {:?}", e);
-            }
+    async fn message(&self, _ctx: Context, msg: Message) {
+
+        // Get channel from json
+        let data = fs::read_to_string("./secret.json")
+            .expect("'secret.json' doesn't exist!");
+        let json: serde_json::Value = serde_json::from_str(&data)
+            .expect("JSON file doesn't have a correct format!");
+        // ok but this is a bruh moment. why i gotta make them strs first and then u64s to make it not panic?
+        let json_channel_id = json["channel_id"].as_str().unwrap();
+        let json_bot_id = json["bot_id"].as_str().unwrap();
+
+        let channel_id = format!("{}",msg.channel_id.get());
+        let bot_id = msg.author.id.get();
+
+        // TODO: privacy concern; if people fuck around with the IDs, they could infiltrate foreign channels. any way to avoid this?
+        // Any messages in this channel are sent to the SRB2 server
+        if channel_id == json_channel_id && bot_id != json_bot_id.parse::<u64>().unwrap()
+        {
+            // Access messages
+            let home = home::home_dir().unwrap();
+            let home_str = home.to_str().unwrap();
+            let msg_path = format!("{}{}", home_str, DISCMSG_TXT);
+
+            // Open the messages file
+            let file = match OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .create_new(false)
+                .append(true)
+                .open(msg_path) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        println!("ERROR: {}", e);
+                        println!("TODO: implement file creation if nonexistent.");
+                        return;
+                    },
+                };
+
+            // Grab user name. If they have a server-specific name, use that, else use their global name, else use their account name.
+            let user_name = match msg.member.clone().unwrap().nick {
+                Some(name) => name,
+                None => match msg.author.global_name {
+                    Some(ref name) => name,
+                    None => &msg.author.name,
+                }.to_string() , //HUH??
+            };
+
+            // Write message in the discord message text file of SRB2
+            let _ = writeln!(&file, "{}", format!("<{}> {}", user_name, msg.content));
         }
+
+        /*
+        if msg.content == "!hello" {
+            if let Err(e) = msg.channel_id.say(&ctx.http, "Hello, world!").await {
+                println!("Error sending message: {:?}", e);
+            }
+        }*/
     }
-    */
 
     async fn ready(&self, _: Context, _ready: Ready) {
         println!(
@@ -147,7 +187,10 @@ async fn main() {
 fn get_lines_num(file_path: &str) -> Result<usize, Box<dyn std::error::Error>> {
     let line = match std::fs::read_to_string(file_path) {
         Ok(line) => line,
-        Err(_) => String::from(">>LOG FILE RELOAD<<"),
+        Err(e) => {
+            println!("ERROR: {}", e);
+            String::from("-")    
+        },
     };
         
     Ok(line.lines().count())
@@ -189,6 +232,8 @@ fn _get_last_match(filename: &str, target: &str) -> Option<String> {
 }
 
 const _LATEST_LOG: &str = "/.srb2/latest-log.txt";
+const MESSAGES_TXT: &str = "/.srb2/luafiles/client/DiscordBot/Messages.txt";
+const DISCMSG_TXT: &str = "/.srb2/luafiles/client/DiscordBot/discordmessage.txt";
 
 //
 // Gets the range from `start` to `end` of a file. 
@@ -244,33 +289,20 @@ fn read_range(file_path: &str, start: usize, end: usize) -> Result<String, Box<d
    Ok(result)
 }
 
+//
+// Any mentions of server emojis are replaced with emojis properly.
+// In addition, any special symbols that may invoke discord markdown (*, _, `, etc.)
+// get formatted so they don't invoke discord markdown (e.g. by appending a backward slash \ behind them.)
+//
 async fn replace_emojis(id: u64, http: &Http, content: &str) -> String {
-   let mut new_content = content.to_string();
-
-   // Temporary soltuion: This is used as a lookup to check on whether words were already replaced with emojis or not.
-   let mut replaced: Vec<&str> = Vec::new();
-
+   let mut new_content: String = String::from(content);
    let guild_id = GuildId::new(id);
    let emojis = http.get_emojis(guild_id).await.unwrap();
-   let words: Vec<&str> = content.split_whitespace().collect();
 
-   // goes over every word in a string
-   for word in words {
-        // boo, we hate links
-        if word.contains("http://") || word.contains("https://") {
-            new_content = new_content.replace(word, "[LINK]");
-        }
-
-        for emoji in &emojis {
-            let capture = rem_first_and_last(word);
-            let emoji_name = emoji.name.as_str();
-
-            if capture == emoji_name && !replaced.contains(&word) {
-                let emoji_id = emoji.id.get();
-                new_content = new_content.replace(word, format!("<:{}:{}>", emoji_name, emoji_id).as_str());
-                replaced.push(word);
-            }
-        }
+   // Go over all emojis of the server and replace with actual emojis, if they're occurring in the string.
+   for emoji in &emojis {
+        let server_emoji = format!(":{}:", emoji.name);
+        new_content = new_content.replace(&server_emoji, format!("<:{}:{}>", emoji.name, emoji.id.get()).as_str());
    }
 
    new_content
@@ -297,7 +329,6 @@ async fn connect_bot() {
 
     // TODO: turn this into cli arg (?)
     let home = home::home_dir().unwrap();
-
     let home_str = home.to_str().unwrap();
     /*match home::home_dir() {
         Some(path) => path.to_str().unwrap(),
@@ -309,7 +340,7 @@ async fn connect_bot() {
 
     // TODO: create path if it doesn't exist
     // this was gonna be used to look up kick/ban message reasons.
-    let msg_path = format!("{}{}", home_str, "/.srb2/luafiles/client/DiscordBot/Messages.txt");
+    let msg_path = format!("{}{}", home_str, MESSAGES_TXT);
 
     // TODO: log rotation yay or ney?
     // Replace messages, since there will be new ones ... if you want more details just check your rotating srb2 logs lol
@@ -318,7 +349,13 @@ async fn connect_bot() {
     let mut seek_start = 0;
     let framework = StandardFramework::new();
 
-    let mut client = Client::builder(token, GatewayIntents::default())
+    // TODO: privacy concerns
+    // Set gateway intents, which decides what events the bot will be notified about
+    let intents = GatewayIntents::GUILD_MESSAGES
+        | GatewayIntents::DIRECT_MESSAGES
+        | GatewayIntents::MESSAGE_CONTENT;
+
+    let mut client = Client::builder(token, intents)
         .event_handler(Handler)
         .framework(framework)
         .await
@@ -344,27 +381,27 @@ async fn connect_bot() {
                 }
 
                 // Bot: You are not allowed to mention anyone/any role.
-                let user_ids: Vec<UserId> = vec![];
-                let user_roles: Vec<Role> = vec![];
-                /*
                 let mentions = Am::new()
                     .all_users(false)
                     .all_roles(false)
                     .everyone(false);
-                    */
 
                 let message = format!("{collected_strs}");
                 let builder = CreateMessage::new()
                     .content(message.clone())
-                    .allowed_mentions(Am::new().everyone(false).users(user_ids).roles(user_roles));
+                    .allowed_mentions(mentions);
 
 
                 // Send a message to the Discord channel
                 let channel_id = ChannelId::new(chnl_id); // Replace with your channel ID
 
-                let _msg = channel_id.send_message(&http, builder)
-                    .await
-                    .expect("REASON");
+                // Ignore errors
+                let _msg = match channel_id.send_message(&http, builder).await {
+                    Ok(_) => {},
+                    Err(e) => {
+                        println!("ERROR: {}", e);
+                    },
+                };
 
                 seek_start = seek_end;
             }
@@ -427,9 +464,14 @@ DESCRIPTION: {DESCRIPTION}
 To print this message again, you can either call {NAME} with no arguments, or call it with the `{ARG_HELP_S}` or `{ARG_HELP}` arguments.
 
 USAGE:
-\t{NAME} {ARG_RUN_S}, {ARG_RUN} [CLI ARGS]
+\t{NAME} {ARG_RUN_S}, {ARG_RUN}
 \t{NAME} {ARG_HELP_S}, {ARG_HELP}
 \t{NAME} {ARG_VERSION_S}, {ARG_VERSION}
+
+WIP:
+\t{NAME} {ARG_RUN_S}, {ARG_RUN} [CLI ARGS]
+\t{NAME} {ARG_PARAMS_S}, {ARG_PARAMS} (TODO)
+\t{NAME} {ARG_CONFIG_S}, {ARG_CONFIG} (TODO)
     
 ARGS:
 \t<CLI ARGS>
