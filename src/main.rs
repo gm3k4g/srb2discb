@@ -37,6 +37,11 @@ const ARG_RUN_S: &str = "-r";
 // how often to update messages on discord (in miliseconds)
 const REFRESH_RATE: u64 = 1200;
 
+// TODO: use config variable instead of `.srb2`
+const _LATEST_LOG: &str = "/.srb2/latest-log.txt";
+const MESSAGES_TXT: &str = "/.srb2/luafiles/client/DiscordBot/Messages.txt";
+const DISCMSG_TXT: &str = "/.srb2/luafiles/client/DiscordBot/discordmessage.txt";
+
 use std::env;
 use std::fs;
 use std::fs::File;
@@ -79,6 +84,7 @@ impl EventHandler for Handler {
         let channel_id = format!("{}",msg.channel_id.get());
         let bot_id = msg.author.id.get();
 
+
         // TODO: privacy concern; if people fuck around with the IDs, they could infiltrate foreign channels. any way to avoid this?
         // Any messages in this channel are sent to the SRB2 server
         if channel_id == json_channel_id && bot_id != json_bot_id.parse::<u64>().unwrap()
@@ -86,16 +92,34 @@ impl EventHandler for Handler {
             // Access messages
             let home = home::home_dir().unwrap();
             let home_str = home.to_str().unwrap();
-            let msg_path = format!("{}{}", home_str, DISCMSG_TXT);
 
-            // Open the messages file
-            let file = match OpenOptions::new()
+            let discord_msg_path = format!("{}{}", home_str, DISCMSG_TXT);
+            let server_msg_path  = format!("{}{}", home_str, MESSAGES_TXT);
+
+            // Open the discord messages file
+            let disc_file = match OpenOptions::new()
                 .read(true)
                 .write(true)
                 .create(true)
                 .create_new(false)
                 .append(true)
-                .open(msg_path) {
+                .open(discord_msg_path) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        println!("ERROR: {}", e);
+                        println!("TODO: implement file creation if nonexistent.");
+                        return;
+                    },
+                };
+
+            // Also open the messages file
+            let msg_file = match OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .create_new(false)
+                .append(true)
+                .open(server_msg_path) {
                     Ok(f) => f,
                     Err(e) => {
                         println!("ERROR: {}", e);
@@ -114,7 +138,8 @@ impl EventHandler for Handler {
             };
 
             // Write message in the discord message text file of SRB2
-            let _ = writeln!(&file, "{}", format!("<{}> {}", user_name, msg.content));
+            let _ = writeln!(&disc_file, "{}", format!("<{}> {}", user_name, msg.content));
+            let _ = writeln!(&msg_file , "{}", format!("[Discord]<{}> {}", user_name, msg.content));
         }
 
         /*
@@ -231,10 +256,6 @@ fn _get_last_match(filename: &str, target: &str) -> Option<String> {
    }
 }
 
-const _LATEST_LOG: &str = "/.srb2/latest-log.txt";
-const MESSAGES_TXT: &str = "/.srb2/luafiles/client/DiscordBot/Messages.txt";
-const DISCMSG_TXT: &str = "/.srb2/luafiles/client/DiscordBot/discordmessage.txt";
-
 //
 // Gets the range from `start` to `end` of a file. 
 // Returns a Result containing a String.
@@ -340,16 +361,82 @@ async fn connect_bot() {
 
     // TODO: create path if it doesn't exist
     // this was gonna be used to look up kick/ban message reasons.
-    let msg_path = format!("{}{}", home_str, MESSAGES_TXT);
+    let disc_path = format!("{}{}", home_str, DISCMSG_TXT);
+    let msg_path  = format!("{}{}", home_str, MESSAGES_TXT);
 
+    // TODO: Turn this into a function
     // TODO: log rotation yay or ney?
     // Replace messages, since there will be new ones ... if you want more details just check your rotating srb2 logs lol
-    std::fs::write(&msg_path, "\n").unwrap();
+    match std::fs::write(&msg_path, "\n") {
+        Ok(_) => {},
+
+        // Create file if it's nonexistent
+        Err(e) => {
+            println!("ERROR: {e}");
+            println!("Attempting to create file...");
+
+            // Create the directory if it doesn't exist
+            let path = std::path::Path::new(&msg_path);
+            let prefix = path.parent().unwrap();
+            std::fs::create_dir_all(prefix).unwrap();
+
+            // Open the discord messages file. Create a new one if it doesn't exist
+            let _ = match OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .create_new(true)
+                .append(true)
+                .open(msg_path.clone()) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        // TODO: Unsure what the error here would be and how to handle it.
+                        println!("ERROR: {}", e);
+                        return;
+                    },
+                };
+        }
+    };
+
+    // Do the same for the discord messages.
+    // Replace messages, since there will be new ones ... if you want more details just check your rotating srb2 logs lol
+    match std::fs::write(&disc_path, "\n") {
+        Ok(_) => {},
+
+        // Create file if it's nonexistent
+        Err(e) => {
+            println!("ERROR: {e}");
+            println!("Attempting to create file...");
+
+            // Create the directory if it doesn't exist
+            let path = std::path::Path::new(&disc_path);
+            let prefix = path.parent().unwrap();
+            std::fs::create_dir_all(prefix).unwrap();
+
+            // Open the discord messages file. Create a new one if it doesn't exist
+            let _ = match OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .create_new(true)
+                .append(true)
+                .open(disc_path.clone()) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        // TODO: Unsure what the error here would be and how to handle it.
+                        println!("ERROR: {}", e);
+                        return;
+                    },
+                };
+        }
+    };
+
+
     //let mut file = File::create(&msg_path).unwrap();
     let mut seek_start = 0;
     let framework = StandardFramework::new();
 
-    // TODO: privacy concerns
+    // TODO: privacy concerns: Bot knows people's messages/DMs
     // Set gateway intents, which decides what events the bot will be notified about
     let intents = GatewayIntents::GUILD_MESSAGES
         | GatewayIntents::DIRECT_MESSAGES
