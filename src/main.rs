@@ -65,12 +65,66 @@ use serenity::model::id::ChannelId;
 use serenity::model::id::GuildId;
 use serenity::model::channel::Message;
 
+//
+// Removes any potential trash/unicode characters in the string.
+// The string itself adheres to ASCII only, staying between the ranges 20 and 7F (hex) in the ASCII table.
+// Afterwards, returns an entirely new String whose contents have been purged properly.
+//
+async fn discord_to_srb2(ctx: &Context, msg: Message) -> String {
+    let mut copy = String::from(msg.content.as_str());
+    
+    copy.retain(|c| {
+        let ascii = c as u32;
+        ascii >= 32 && ascii <= 126
+    });
+
+    // Replace backward slashes.
+    copy = copy.replace("\n", "\\n");
+
+    // Let's look for any potential links, and get rid of them.
+    let copy_splitted: Vec<&str> = copy.split_whitespace().collect();
+    let copy_only_links: Vec<&str> = copy_splitted
+        .into_iter()
+        .filter(|word| {
+            word.contains("https://") || word.contains("http://")
+            })
+        .collect();
+    
+    // Let's remove links
+    let mut no_links = copy.clone();
+    for link in &copy_only_links {
+        no_links = no_links.replace(link, "[LINK]");
+    }
+
+    // Turn mentions into names
+    let mut mentions = no_links.clone();
+    let guild_id = msg.guild_id.unwrap();
+
+    for mention in &msg.mentions {
+        let name = match mention.nick_in(ctx, guild_id).await {
+            Some(nick) => nick.to_string(),
+            None => {
+                match mention.global_name.clone() {
+                    Some(name) => name,
+                    None => mention.name.clone()
+                }
+            }
+        };
+
+        mentions = mentions.replace(format!("<@{}>", mention.id.get()).as_str(), &name);
+    };
+
+    // The result.
+    let result = mentions;
+    result
+}
+
 struct Handler;
 
 // TODO: Error out if the lua file isn't detected on the SRB2 server?
 #[async_trait]
 impl EventHandler for Handler {
-    async fn message(&self, _ctx: Context, msg: Message) {
+    async fn message(&self, ctx: Context, msg: Message) {
 
         // Get channel from json
         let data = fs::read_to_string("./secret.json")
@@ -113,7 +167,7 @@ impl EventHandler for Handler {
                 };
 
             // Also open the messages file
-            let msg_file = match OpenOptions::new()
+            let _msg_file = match OpenOptions::new()
                 .read(true)
                 .write(true)
                 .create(true)
@@ -138,8 +192,11 @@ impl EventHandler for Handler {
             };
 
             // Write message in the discord message text file of SRB2
-            let _ = writeln!(&disc_file, "{}", format!("<{}> {}", user_name, msg.content));
-            let _ = writeln!(&msg_file , "{}", format!("[Discord]<{}> {}", user_name, msg.content));
+            let msg_content = discord_to_srb2(&ctx, msg).await;
+            if msg_content.len() > 1 {
+                let _ = writeln!(&disc_file, "{}", format!("<{}> {}", user_name, msg_content));    
+            }
+            //let _ = writeln!(&msg_file , "{}", format!("[Discord]<{}> {}", user_name, msg.content));
         }
 
         /*
