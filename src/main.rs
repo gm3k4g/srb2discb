@@ -372,18 +372,24 @@ fn read_range(file_path: &str, start: usize, end: usize) -> Result<String, Box<d
 // In addition, any special symbols that may invoke discord markdown (*, _, `, etc.)
 // get formatted so they don't invoke discord markdown (e.g. by appending a backward slash \ behind them.)
 //
-async fn replace_emojis(id: u64, http: &Http, content: &str) -> String {
-   let mut new_content: String = String::from(content);
-   let guild_id = GuildId::new(id);
-   let emojis = http.get_emojis(guild_id).await.unwrap();
+async fn replace_emojis(id: u64, http: &Http, content: &str) -> Option<String> {
+    let mut new_content: String = String::from(content);
+    let guild_id = GuildId::new(id);
+    let emojis = match http.get_emojis(guild_id).await {
+        Ok(emojis) => emojis,
+        Err(e) => {
+            println!("ERROR: {e}");
+            return None
+        },
+    };
 
-   // Go over all emojis of the server and replace with actual emojis, if they're occurring in the string.
-   for emoji in &emojis {
+    // Go over all emojis of the server and replace with actual emojis, if they're occurring in the string.
+    for emoji in &emojis {
         let server_emoji = format!(":{}:", emoji.name);
         new_content = new_content.replace(&server_emoji, format!("<:{}:{}>", emoji.name, emoji.id.get()).as_str());
-   }
+    }
 
-   new_content
+    Some(new_content)
 }
 
 
@@ -521,7 +527,10 @@ async fn connect_bot() {
                     continue
                 } else {
 
-                   collected_strs = replace_emojis(guild_id, &http, &collected_strs).await;
+                   collected_strs = match replace_emojis(guild_id, &http, &collected_strs).await {
+                        Some(literal) => literal,
+                        None => String::from(""),
+                   };
                 }
 
                 // Bot: You are not allowed to mention anyone/any role.
